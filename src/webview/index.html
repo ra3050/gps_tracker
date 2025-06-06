@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>실시간 GPS 이동 경로 추적 앱</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      body {
+        font-family: 'Inter', sans-serif;
+        background-color: #f0f4f8; /* 밝은 배경색 */
+      }
+      canvas {
+        border: 2px solid #cbd5e1; /* 캔버스 테두리 */
+        background-color: #ffffff; /* 캔버스 배경색 */
+        display: block;
+        margin: 0 auto;
+        max-width: 95%; /* 캔버스 최대 너비 */
+        height: 400px; /* 고정 높이 */
+        border-radius: 12px; /* 둥근 모서리 */
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); /* 그림자 효과 */
+        touch-action: none; /* 터치 스크롤 방지 */
+      }
+      /* 메시지 박스 스타일 */
+      .message-box {
+        background-color: #fff;
+        border: 1px solid #ccc;
+        padding: 1rem;
+        margin-bottom: 1rem;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        text-align: center;
+      }
+    </style>
+  </head>
+  <body class="flex flex-col items-center justify-center min-h-screen p-4">
+    <!-- 메시지 박스 -->
+    <div id="messageBox" class="message-box w-full max-w-lg mb-4 hidden"></div>
+
+    <div class="bg-white p-6 rounded-xl shadow-lg w-full max-w-lg">
+      <h1 class="text-3xl font-bold text-center text-gray-800 mb-6">
+        <span class="inline-block align-middle mr-2">📍</span>
+        GPS 경로 추적기
+      </h1>
+
+      <!-- 캔버스 컨테이너 -->
+      <div class="flex justify-center mb-6">
+        <canvas id="pathCanvas" width="800" height="400"></canvas>
+      </div>
+
+      <div class="text-center text-lg font-semibold text-gray-700 mb-4">
+        이동 거리:
+        <span id="distanceDisplay" class="text-blue-600">0.00</span> m
+      </div>
+
+      <div class="flex flex-wrap justify-center gap-4">
+        <button
+          id="startButton"
+          class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg shadow-md transition duration-300 transform hover:scale-105 min-w-[150px]">
+          <span class="inline-block align-middle mr-2">▶️</span> 추적 시작
+        </button>
+        <button
+          id="stopButton"
+          class="flex-1 bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-6 rounded-lg shadow-md transition duration-300 transform hover:scale-105 min-w-[150px]"
+          disabled>
+          <span class="inline-block align-middle mr-2">⏹️</span> 추적 중지
+        </button>
+        <button
+          id="clearButton"
+          class="flex-1 bg-gray-600 hover:bg-gray-700 text-white font-bold py-3 px-6 rounded-lg shadow-md transition duration-300 transform hover:scale-105 min-w-[150px]">
+          <span class="inline-block align-middle mr-2">🗑️</span> 경로 지우기
+        </button>
+      </div>
+      <p class="text-sm text-gray-500 text-center mt-4">
+        * 이 앱은 정확한 지도가 아닌 상대적인 이동 경로를 그립니다.
+        <br />* GPS 위치 권한이 필요합니다.
+      </p>
+    </div>
+
+    <script>
+      const canvas = document.getElementById('pathCanvas');
+      const ctx = canvas.getContext('2d');
+      const startButton = document.getElementById('startButton');
+      const stopButton = document.getElementById('stopButton');
+      const clearButton = document.getElementById('clearButton');
+      const distanceDisplay = document.getElementById('distanceDisplay');
+      const messageBox = document.getElementById('messageBox');
+
+      let watchId = null; // GPS 추적을 위한 watchPosition ID
+      let pathPoints = []; // {lat, lon} 객체 배열로 경로 저장
+      let totalDistance = 0; // 총 이동 거리 (미터)
+      let lastKnownPosition = null; // 마지막으로 알려진 GPS 위치
+
+      // 캔버스 크기 조정 함수
+      function resizeCanvas() {
+        // 부모 컨테이너의 너비에 맞춰 캔버스 너비 설정
+        const parentWidth = canvas.parentElement.clientWidth;
+        canvas.width = Math.min(parentWidth, 800); // 최대 800px 또는 부모 너비
+        // 높이는 고정 유지 (CSS에서 설정)
+        // canvas.height = 400; // 또는 동적으로 설정
+        drawPath(); // 캔버스 크기가 변경되면 경로를 다시 그립니다.
+      }
+
+      // 초기 캔버스 크기 설정 및 리사이즈 이벤트 리스너 추가
+      window.addEventListener('resize', resizeCanvas);
+      resizeCanvas(); // 페이지 로드 시 한 번 실행
+
+      // 메시지 표시 함수
+      function showMessage(message, type = 'info') {
+        messageBox.textContent = message;
+        messageBox.className = 'message-box w-full max-w-lg mb-4 block'; // 초기화
+        if (type === 'error') {
+          messageBox.classList.add(
+            'bg-red-100',
+            'text-red-700',
+            'border-red-400',
+          );
+        } else if (type === 'success') {
+          messageBox.classList.add(
+            'bg-green-100',
+            'text-green-700',
+            'border-green-400',
+          );
+        } else {
+          // info
+          messageBox.classList.add(
+            'bg-blue-100',
+            'text-blue-700',
+            'border-blue-400',
+          );
+        }
+        // 3초 후 메시지 숨기기
+        setTimeout(() => {
+          messageBox.classList.add('hidden');
+        }, 5000);
+      }
+
+      // 도를 라디안으로 변환
+      function toRadians(deg) {
+        return (deg * Math.PI) / 180;
+      }
+
+      // Haversine 공식을 사용하여 두 위도/경도 지점 간의 거리 계산 (미터)
+      function haversineDistance(lat1, lon1, lat2, lon2) {
+        const R = 6371e3; // 지구의 반지름 (미터)
+        const φ1 = toRadians(lat1);
+        const φ2 = toRadians(lat2);
+        const Δφ = toRadians(lat2 - lat1);
+        const Δλ = toRadians(lon2 - lon1);
+
+        const a =
+          Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+          Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+        const d = R * c; // 미터 단위
+        return d;
+      }
+
+      // 위도/경도 포인트를 캔버스 좌표로 변환
+      function getCanvasCoordinates(point, minLat, maxLat, minLon, maxLon) {
+        if (pathPoints.length < 2) {
+          // 초기 지점 또는 단일 지점의 경우, 캔버스 중앙에 배치
+          return {x: canvas.width / 2, y: canvas.height / 2};
+        }
+
+        const latRange = maxLat - minLat;
+        const lonRange = maxLon - minLon;
+
+        // 캔버스에 경로가 너무 작게 그려지는 것을 방지하기 위한 최소 범위 설정
+        const minEffectiveRange = 0.0001; // 약 10-20 미터
+        const effectiveLatRange = Math.max(latRange, minEffectiveRange);
+        const effectiveLonRange = Math.max(lonRange, minEffectiveRange);
+
+        // 캔버스에 꽉 차게 그리기 위한 스케일 팩터 계산
+        // 여백을 주기 위해 0.95 사용 (5% 여백)
+        const scaleX = (canvas.width * 0.95) / effectiveLonRange;
+        const scaleY = (canvas.height * 0.95) / effectiveLatRange;
+        const scale = Math.min(scaleX, scaleY);
+
+        // 캔버스 중앙에 경로를 배치하기 위한 오프셋 계산
+        const renderedWidth = effectiveLonRange * scale;
+        const renderedHeight = effectiveLatRange * scale;
+        const offsetX = (canvas.width - renderedWidth) / 2;
+        const offsetY = (canvas.height - renderedHeight) / 2;
+
+        // 위도(y)는 캔버스에서 아래로 갈수록 값이 커지므로, 위도 값을 반전
+        const x = (point.lon - minLon) * scale + offsetX;
+        const y = (maxLat - point.lat) * scale + offsetY;
+
+        return {x, y};
+      }
+
+      // 캔버스에 경로 그리기
+      function drawPath() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height); // 캔버스 지우기
+
+        if (pathPoints.length === 0) {
+          return;
+        }
+
+        // 경로의 최소/최대 위도 및 경도 찾기
+        let minLat = pathPoints[0].lat,
+          maxLat = pathPoints[0].lat;
+        let minLon = pathPoints[0].lon,
+          maxLon = pathPoints[0].lon;
+
+        for (const p of pathPoints) {
+          minLat = Math.min(minLat, p.lat);
+          maxLat = Math.max(maxLat, p.lat);
+          minLon = Math.min(minLon, p.lon);
+          maxLon = Math.max(maxLon, p.lon);
+        }
+
+        ctx.beginPath();
+        ctx.strokeStyle = '#007bff'; // 선 색상 (파란색)
+        ctx.lineWidth = 4; // 선 두께
+
+        // 첫 번째 지점을 기준으로 경로 시작
+        const startCoords = getCanvasCoordinates(
+          pathPoints[0],
+          minLat,
+          maxLat,
+          minLon,
+          maxLon,
+        );
+        ctx.moveTo(startCoords.x, startCoords.y);
+
+        // 모든 경로 지점을 연결
+        for (let i = 1; i < pathPoints.length; i++) {
+          const currentCoords = getCanvasCoordinates(
+            pathPoints[i],
+            minLat,
+            maxLat,
+            minLon,
+            maxLon,
+          );
+          ctx.lineTo(currentCoords.x, currentCoords.y);
+        }
+        ctx.stroke();
+
+        // 시작점과 끝점에 원 그리기
+        ctx.fillStyle = '#28a745'; // 시작점 (녹색)
+        ctx.beginPath();
+        ctx.arc(startCoords.x, startCoords.y, 6, 0, Math.PI * 2);
+        ctx.fill();
+
+        if (pathPoints.length > 1) {
+          const endCoords = getCanvasCoordinates(
+            pathPoints[pathPoints.length - 1],
+            minLat,
+            maxLat,
+            minLon,
+            maxLon,
+          );
+          ctx.fillStyle = '#dc3545'; // 끝점 (빨간색)
+          ctx.beginPath();
+          ctx.arc(endCoords.x, endCoords.y, 6, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      // GPS 위치 성공 콜백 함수
+      function successCallback(position) {
+        const {latitude, longitude} = position.coords;
+        const newPoint = {lat: latitude, lon: longitude};
+
+        if (lastKnownPosition) {
+          // 이전 지점과의 거리 계산
+          const distanceSegment = haversineDistance(
+            lastKnownPosition.latitude,
+            lastKnownPosition.longitude,
+            latitude,
+            longitude,
+          );
+          totalDistance += distanceSegment;
+        }
+
+        pathPoints.push(newPoint);
+        lastKnownPosition = position.coords;
+
+        distanceDisplay.textContent = totalDistance.toFixed(2); // 소수점 두 자리까지 표시
+
+        drawPath(); // 경로 다시 그리기
+        showMessage(
+          `새로운 위치: 위도 ${latitude.toFixed(5)}, 경도 ${longitude.toFixed(
+            5,
+          )}`,
+          'info',
+        );
+      }
+
+      // GPS 위치 실패 콜백 함수
+      function errorCallback(error) {
+        let errorMessage = '';
+        switch (error.code) {
+          case error.PERMISSION_DENIED:
+            errorMessage =
+              '위치 정보 권한이 거부되었습니다. 앱을 사용하려면 권한을 허용해주세요.';
+            break;
+          case error.POSITION_UNAVAILABLE:
+            errorMessage =
+              '위치 정보를 사용할 수 없습니다. GPS 신호를 확인해주세요.';
+            break;
+          case error.TIMEOUT:
+            errorMessage =
+              '위치 정보를 가져오는 시간이 초과되었습니다. 네트워크 연결을 확인해주세요.';
+            break;
+          case error.UNKNOWN_ERROR:
+            errorMessage = '알 수 없는 오류가 발생했습니다.';
+            break;
+        }
+        showMessage(`오류: ${errorMessage}`, 'error');
+        stopTracking(); // 오류 발생 시 추적 중지
+      }
+
+      // 추적 시작 함수
+      function startTracking() {
+        if (!navigator.geolocation) {
+          showMessage(
+            '이 브라우저에서는 GPS 기능을 지원하지 않습니다.',
+            'error',
+          );
+          return;
+        }
+
+        if (watchId === null) {
+          // 위치 감시 시작 (매 2초마다, 고정밀도)
+          watchId = navigator.geolocation.watchPosition(
+            successCallback,
+            errorCallback,
+            {
+              enableHighAccuracy: true,
+              timeout: 5000,
+              maximumAge: 0,
+            },
+          );
+          startButton.disabled = true;
+          stopButton.disabled = false;
+          showMessage('GPS 추적을 시작합니다...', 'success');
+        }
+      }
+
+      // 추적 중지 함수
+      function stopTracking() {
+        if (watchId !== null) {
+          navigator.geolocation.clearWatch(watchId);
+          watchId = null;
+          startButton.disabled = false;
+          stopButton.disabled = true;
+          showMessage('GPS 추적을 중지합니다.', 'info');
+        }
+      }
+
+      // 경로 지우기 함수
+      function clearPath() {
+        stopTracking(); // 경로 지우기 전에 추적 중지
+        pathPoints = [];
+        totalDistance = 0;
+        lastKnownPosition = null;
+        distanceDisplay.textContent = totalDistance.toFixed(2);
+        drawPath(); // 캔버스 지우기
+        showMessage('경로와 거리를 지웠습니다.', 'info');
+      }
+
+      // 이벤트 리스너 연결
+      startButton.addEventListener('click', startTracking);
+      stopButton.addEventListener('click', stopTracking);
+      clearButton.addEventListener('click', clearPath);
+
+      // 페이지 로드 시 메시지 표시
+      window.onload = () => {
+        if (navigator.geolocation) {
+          showMessage(
+            "아래 '추적 시작' 버튼을 눌러 GPS 추적을 시작하세요.",
+            'info',
+          );
+        } else {
+          showMessage(
+            '이 브라우저는 지오로케이션(GPS)을 지원하지 않습니다.',
+            'error',
+          );
+        }
+      };
+    </script>
+  </body>
+</html>
