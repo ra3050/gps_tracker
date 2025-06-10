@@ -5,13 +5,16 @@
   "scripts": {
     "android": "react-native run-android",
     "ios": "react-native run-ios",
+    "ios:dev:d": "react-native run-ios --device 'iPhone'",
     "lint": "eslint .",
     "start": "react-native start",
     "test": "jest"
   },
   "dependencies": {
+    "@react-native-community/geolocation": "^3.4.0",
     "react": "19.0.0",
     "react-native": "0.79.3",
+    "react-native-canvas": "^0.1.40",
     "react-native-geolocation-service": "^5.3.1",
     "react-native-safe-area-context": "^5.4.1",
     "react-native-webview": "^13.14.1"
